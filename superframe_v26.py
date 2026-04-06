@@ -5,18 +5,20 @@ from ultralytics import YOLO
 import numpy as np
 import math
 import psutil
+import subprocess
+
 try:
     import GPUtil
     HAS_GPUTIL = True
 except ImportError:
     HAS_GPUTIL = False
 
-
 class MultiCamStream:
     def __init__(self, urls):
         self.urls = urls
         self.num_cams = len(urls)
         self.frames = [None] * self.num_cams
+        self.grabbed_counts = [0] * self.num_cams  # 新增：記錄每支相機實際抓取到的幀數
         self.stopped = False
         self.threads = []
         print(f"啟動 {self.num_cams} 支相機的背景拉流")
@@ -37,6 +39,7 @@ class MultiCamStream:
             ret, frame = cap.read()
             if ret:
                 self.frames[index] = frame
+                self.grabbed_counts[index] += 1  # 新增：成功抓取一幀就 +1
                 if is_video_file: time.sleep(0.033) 
             else:
                 self.frames[index] = None 
@@ -50,6 +53,18 @@ class MultiCamStream:
     def stop(self):
         self.stopped = True
         for t in self.threads: t.join() 
+
+
+def get_gpu_power():
+    try:
+        result = subprocess.check_output(
+            ['nvidia-smi', '--query-gpu=power.draw', '--format=csv,noheader,nounits'],
+            encoding='utf-8'
+        )
+        return float(result.strip().split('\n')[0])
+    except Exception:
+        return 0.0
+
 
 def letterbox_image(img, expected_size):
     ih, iw = img.shape[0:2]
@@ -67,13 +82,7 @@ def letterbox_image(img, expected_size):
     return new_image
 
 if __name__ == '__main__':
-
-    MODEL_WEIGHTS = "yolo26n.pt" 
-    try:
-        model = YOLO(MODEL_WEIGHTS) 
-    except Exception as e:
-
-        exit()
+    model = YOLO("yolov8n.pt")
     
     camera_urls = [
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/store-aisle-detection.mp4", 
@@ -85,16 +94,16 @@ if __name__ == '__main__':
     time.sleep(2) 
     
     CELL_W, CELL_H = 640, 360
-    window_name = "YOLO26 SuperFrame Inference"
+    window_name = "Super Frame Inference v8"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL) 
     cv2.resizeWindow(window_name, 1280, 720) 
 
-    TEST_DURATION = 60 
-    
+    TEST_DURATION = 300 
     total_frames_processed = 0
     total_inference_time = 0
     total_e2e_time = 0
     cpu_usages, ram_usages, gpu_usages, vram_usages = [], [], [], []
+    power_usages = [] # 新增：記錄功耗
     
     num_cams = len(camera_urls)
     cols = math.ceil(math.sqrt(num_cams)) 
@@ -102,14 +111,13 @@ if __name__ == '__main__':
 
     start_time = time.time()
 
-
     while (time.time() - start_time) < TEST_DURATION:
         loop_start_time = time.time()
         batch_frames = streamer.read()
         
         valid_frame = next((f for f in batch_frames if f is not None), None)
         if valid_frame is None:
-            cv2.waitKey(100) 
+            time.sleep(0.1)
             continue
             
         black_frame = np.zeros((CELL_H, CELL_W, 3), dtype=np.uint8)
@@ -123,6 +131,7 @@ if __name__ == '__main__':
         while len(processed_frames) < (rows * cols):
             processed_frames.append(black_frame.copy())
 
+        # 拼圖v8
         grid_rows = []
         for r in range(rows):
             row_frames = processed_frames[r * cols : (r + 1) * cols]
@@ -141,8 +150,9 @@ if __name__ == '__main__':
                 offset_y = (i // cols) * CELL_H
                 cv2.putText(annotated_super_frame, "Streaming not found", (offset_x+100, offset_y+200), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
 
+        # countdown
         elapsed = time.time() - start_time
-        cv2.putText(annotated_super_frame, f"Plan C Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(annotated_super_frame, f" Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
         cv2.imshow(window_name, annotated_super_frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'): 
@@ -161,29 +171,43 @@ if __name__ == '__main__':
             if gpus:
                 gpu_usages.append(gpus[0].load * 100)
                 vram_usages.append(gpus[0].memoryUsed / 1024)
+                power_usages.append(get_gpu_power()) # 記錄當下功耗
 
     streamer.stop()
     cv2.destroyAllWindows()
     
     real_duration = time.time() - start_time
     
-    print("\n\n" + "="*60)
-    print("="*60)
-    print(f"測試完成時間：{time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"實際測試時長: {real_duration:.1f} 秒")
-    print(f"總處理循環數: {total_frames_processed} 圈\n")
-    
-    print(f" 總輸入FPS:     {(total_frames_processed * 4) / real_duration:.2f}")
-    print(f" 單路平均FPS:   {total_frames_processed / real_duration:.2f}")
-    print(f" 推論延遲(ms):  {(total_inference_time / total_frames_processed) * 1000:.2f}")
-    print(f" 端到端延遲(ms): {(total_e2e_time / total_frames_processed) * 1000:.2f}")
-    print(f" CPU 平均(%):   {np.mean(cpu_usages):.1f}%")
-    print(f" RAM 平均(GB):  {np.mean(ram_usages):.2f} GB")
+    if total_frames_processed == 0:
+        exit()
+
+    # 計算掉幀率
+    total_grabbed = sum(streamer.grabbed_counts)
+    total_processed_cams = total_frames_processed * num_cams
+    if total_grabbed > 0:
+        drop_rate = max(0.0, ((total_grabbed - total_processed_cams) / total_grabbed) * 100)
+    else:
+        drop_rate = 0.0
+
+    print("\n" + "="*50)
+    print("="*50)
+    print(f"測試時長: {real_duration:.1f} 秒")
+    print(f"總處理循環數: {total_frames_processed} 圈")
+    print(f"總輸入FPS:     {(total_frames_processed * num_cams) / real_duration:.2f}")
+    print(f"單路平均FPS:   {total_frames_processed / real_duration:.2f}")
+    print(f"推論延遲(ms):  {(total_inference_time / total_frames_processed) * 1000:.2f}")
+    print(f"端到端延遲(ms): {(total_e2e_time / total_frames_processed) * 1000:.2f}")
+    print(f"CPU 平均(%):   {np.mean(cpu_usages):.1f}%")
+    print(f"RAM 平均(GB):  {np.mean(ram_usages):.2f} GB")
     
     if HAS_GPUTIL and gpu_usages:
-        print(f" GPU 平均(%):   {np.mean(gpu_usages):.1f}%")
-        print(f" VRAM 平均(GB): {np.mean(vram_usages):.2f} GB")
+        print(f"GPU 平均(%):   {np.mean(gpu_usages):.1f}%")
+        print(f"VRAM 平均(GB): {np.mean(vram_usages):.2f} GB")
+        print(f"功耗平均(W):   {np.mean(power_usages):.1f} W")
     else:
-        print(" GPU 平均(%):   N/A")
+        print("GPU 平均(%):   N/A")
         print("VRAM 平均(GB): N/A")
-    print("="*60)
+        print("功耗平均(W):   N/A")
+        
+    print(f"掉幀率(%):     {drop_rate:.1f}%")
+    print("="*50)
