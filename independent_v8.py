@@ -74,7 +74,7 @@ def letterbox_image(img, expected_size):
 
 
 def run_single_inference(model, frame):
-    # 在這裡，每個 frame 都由自己的 YOLO 模型推論
+    # 每個 frame 都由自己的 YOLO 模型推論
     results = model(frame, conf=0.30, verbose=False)
     return results[0].plot()
 
@@ -137,15 +137,15 @@ if __name__ == '__main__':
     while (time.time() - start_time) < TEST_DURATION:
         loop_start_time = time.time()
 
-        # 1. 同時讀取所有來源的 frame
+        # 同時讀取所有來源的 frame
         batch_frames = streamer.read()
 
-        # 2. 若有任一 frame 有效，就開始處理；否則略過
+        # 若有任一 frame 有效，就開始處理；否則略過
         if not any(f is not None for f in batch_frames):
             time.sleep(0.01)
             continue
 
-        # 3. 準備縮放後的 frame 陣列
+        #  準備縮放後的 frame 陣列
         resized_frames = [None] * num_cams
         for i, f in enumerate(batch_frames):
             if f is not None:
@@ -153,7 +153,7 @@ if __name__ == '__main__':
             else:
                 resized_frames[i] = black_frame.copy()
 
-        # 4. 並行啟動 YOLO 推論（每個 frame 一個 thread，用對應的 model[i]）
+        #  並行啟動 YOLO 推論（每個 frame 一個 thread，用對應的 model[i]）
         future_tasks = []
         infer_start_time = time.time()
 
@@ -162,7 +162,7 @@ if __name__ == '__main__':
             future = executor.submit(run_single_inference, models[i], resized_frames[i])
             future_tasks.append(future)
 
-        # 5. 取得全部結果（這步會「同步」等所有 thread 完成，就是你說的「並行」）
+        # 取得全部結果
         processed_frames = [None] * num_cams
         for i, future in enumerate(future_tasks):
             try:
@@ -180,18 +180,15 @@ if __name__ == '__main__':
 
         loop_infer_time = time.time() - infer_start_time
 
-        # 6. 填補可能不足的格子
         while len(processed_frames) < (rows * cols):
             processed_frames.append(black_frame.copy())
 
-        # 7. 拼圖：2x2 或 1x4 等
         grid_rows = []
         for r in range(rows):
             row_frames = processed_frames[r * cols : (r + 1) * cols]
             grid_rows.append(cv2.hconcat(row_frames))
         annotated_super_frame = cv2.vconcat(grid_rows)
 
-        # 8. 顯示資訊
         elapsed = time.time() - start_time
         cv2.putText(annotated_super_frame,
                     f"Concurrent Testing... {int(TEST_DURATION - elapsed)}s left",
