@@ -145,9 +145,7 @@ if __name__ == '__main__':
                 processed_frames.append(blank)
                 
         loop_infer_time = time.time() - infer_start_time
-        # ==========================================
-                
-        # 補齊空缺的格子 (如果攝影機數量不是完美矩形)
+
         while len(processed_frames) < (rows * cols):
             processed_frames.append(black_frame.copy())
 
