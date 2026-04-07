@@ -6,6 +6,7 @@ import numpy as np
 import math
 import psutil
 import subprocess
+import concurrent.futures  #用來處理多執行緒並發
 
 try:
     import GPUtil
@@ -73,12 +74,15 @@ def letterbox_image(img, expected_size):
     new_image[top:top+nh, left:left+nw] = image_resized
     return new_image
 
+# 單一執行緒執行的任務函數
+def run_single_inference(model, frame):
+    results = model(frame, conf=0.30, verbose=False)
+    return results[0].plot()
+
 if __name__ == '__main__':
     TEST_DURATION = 300  # 測試秒數 
     MODEL_WEIGHTS = "yolov8n.pt"
     CELL_W, CELL_H = 640, 360    # 單路解析度
-    
-    model = YOLO(MODEL_WEIGHTS) 
     
     camera_urls = [
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/store-aisle-detection.mp4", 
@@ -87,10 +91,14 @@ if __name__ == '__main__':
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/people-detection.mp4" 
     ] 
     
+    num_cams = len(camera_urls)
+    
+    models = [YOLO(MODEL_WEIGHTS) for _ in range(num_cams)]
+    
     streamer = MultiCamStream(camera_urls)
     time.sleep(2) # 等待攝影機連線
     
-    window_name = "Independent Inference v8"
+    window_name = "Concurrent Multi-Model Inference"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL) 
     cv2.resizeWindow(window_name, 1280, 720) 
 
@@ -104,9 +112,11 @@ if __name__ == '__main__':
     vram_usages = []
     power_usages = []
     
-    num_cams = len(camera_urls)
     cols = math.ceil(math.sqrt(num_cams)) 
     rows = math.ceil(num_cams / cols)
+
+    # 建立一個數量與相機相同的執行緒池 (Thread Pool)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_cams)
 
     start_time = time.time()
 
@@ -121,20 +131,25 @@ if __name__ == '__main__':
             continue
             
         black_frame = np.zeros((CELL_H, CELL_W, 3), dtype=np.uint8)
-        processed_frames = []
+        processed_frames = [None] * num_cams
         
+        # 先把需要推論的畫面縮放準備好
+        tasks = {}
         infer_start_time = time.time()
         
+
         for i, f in enumerate(batch_frames):
             if f is not None:
-                # 先把原始畫面縮放到指定大小
                 resized_f = letterbox_image(f, (CELL_W, CELL_H))
-                # 獨立送進模型運算！
-                results = model(resized_f, conf=0.30, verbose=False)
-                # 取得畫好框框的圖，存入準備拼圖的陣列
-                processed_frames.append(results[0].plot())
+                # 把任務丟給執行緒池，用第 i 個模型算第 i 張圖
+                tasks[i] = executor.submit(run_single_inference, models[i], resized_f)
+
+
+        for i in range(num_cams):
+            if i in tasks:
+                # 等待這個執行緒算完，並拿回畫好框框的圖片
+                processed_frames[i] = tasks[i].result()
             else:
-                # 如果這路沒畫面，就畫一張黑圖，並加上文字提示
                 blank = black_frame.copy()
                 text = "Streaming not found"
                 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -142,8 +157,9 @@ if __name__ == '__main__':
                 text_x = (CELL_W - text_size[0]) // 2
                 text_y = (CELL_H + text_size[1]) // 2
                 cv2.putText(blank, text, (text_x, text_y), font, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
-                processed_frames.append(blank)
+                processed_frames[i] = blank
                 
+        # 4 張圖的「並行」推論總時間
         loop_infer_time = time.time() - infer_start_time
 
         while len(processed_frames) < (rows * cols):
@@ -157,7 +173,7 @@ if __name__ == '__main__':
         annotated_super_frame = cv2.vconcat(grid_rows)
 
         elapsed = time.time() - start_time
-        cv2.putText(annotated_super_frame, f" Independent Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(annotated_super_frame, f" Concurrent Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
         cv2.imshow(window_name, annotated_super_frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -179,6 +195,8 @@ if __name__ == '__main__':
                 vram_usages.append(gpus[0].memoryUsed / 1024)
                 power_usages.append(get_gpu_power()) # 記錄當下功耗
 
+    # 關閉資源
+    executor.shutdown(wait=True)
     streamer.stop()
     cv2.destroyAllWindows()
     
@@ -201,7 +219,7 @@ if __name__ == '__main__':
     print(f"總處理循環數: {total_frames_processed} 圈")
     print(f"總輸入FPS:     {(total_frames_processed * num_cams) / real_duration:.2f}")
     print(f"單路平均FPS:   {total_frames_processed / real_duration:.2f}")
-    print(f"推論延遲(ms):  {(total_inference_time / total_frames_processed) * 1000:.2f}")
+    print(f"推論延遲(ms):  {(total_inference_time / total_frames_processed) * 1000:.2f} (4線程平行運算時間)")
     print(f"端到端延遲(ms): {(total_e2e_time / total_frames_processed) * 1000:.2f}")
     print(f"CPU 平均(%):   {np.mean(cpu_usages):.1f}%")
     print(f"RAM 平均(GB):  {np.mean(ram_usages):.2f} GB")
