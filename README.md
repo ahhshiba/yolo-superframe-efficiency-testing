@@ -11,3 +11,5 @@ python3 -m venv venv
 
 # 啟動虛擬環境 (Linux / macOS / WSL)
 source venv/bin/activate
+# 查看系統給顯卡的編號
+nvidia-smi
