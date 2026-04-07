@@ -75,7 +75,7 @@ def letterbox_image(img, expected_size):
 
 def run_single_inference(model, frame):
     # 每個 frame 都由自己的 YOLO 模型推論
-    results = model(frame, conf=0.30, verbose=False)
+    results = model(frame, conf=0.30, verbose=False, device='0')
     return results[0].plot()
 
 
