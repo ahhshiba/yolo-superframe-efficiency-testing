@@ -18,7 +18,7 @@ class MultiCamStream:
         self.urls = urls
         self.num_cams = len(urls)
         self.frames = [None] * self.num_cams
-        self.grabbed_counts = [0] * self.num_cams  # 新增：記錄每支相機實際抓取到的幀數
+        self.grabbed_counts = [0] * self.num_cams  # 記錄每支相機實際抓取到的幀數
         self.stopped = False
         self.threads = []
         print(f"啟動 {self.num_cams} 支相機的背景拉流")
@@ -39,7 +39,7 @@ class MultiCamStream:
             ret, frame = cap.read()
             if ret:
                 self.frames[index] = frame
-                self.grabbed_counts[index] += 1  # 新增：成功抓取一幀就 +1
+                self.grabbed_counts[index] += 1  
                 if is_video_file: time.sleep(0.033) 
             else:
                 self.frames[index] = None 
@@ -98,12 +98,12 @@ if __name__ == '__main__':
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL) 
     cv2.resizeWindow(window_name, 1280, 720) 
 
-    TEST_DURATION = 60 
+    TEST_DURATION = 300 
     total_frames_processed = 0
     total_inference_time = 0
     total_e2e_time = 0
     cpu_usages, ram_usages, gpu_usages, vram_usages = [], [], [], []
-    power_usages = [] # 新增：記錄功耗
+    power_usages = [] 
     
     num_cams = len(camera_urls)
     cols = math.ceil(math.sqrt(num_cams)) 
@@ -131,7 +131,7 @@ if __name__ == '__main__':
         while len(processed_frames) < (rows * cols):
             processed_frames.append(black_frame.copy())
 
-        # 拼圖v8
+        # 拼圖
         grid_rows = []
         for r in range(rows):
             row_frames = processed_frames[r * cols : (r + 1) * cols]
@@ -171,7 +171,7 @@ if __name__ == '__main__':
             if gpus:
                 gpu_usages.append(gpus[0].load * 100)
                 vram_usages.append(gpus[0].memoryUsed / 1024)
-                power_usages.append(get_gpu_power()) # 記錄當下功耗
+                power_usages.append(get_gpu_power()) 
 
     streamer.stop()
     cv2.destroyAllWindows()
