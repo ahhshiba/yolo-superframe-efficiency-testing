@@ -139,7 +139,7 @@ if __name__ == '__main__':
         super_frame = cv2.vconcat(grid_rows)
         
         infer_start = time.time()
-        results = model(super_frame, conf=0.30, verbose=False, device='0')
+        results = model(super_frame, conf=0.30, verbose=False, device='0') # 根據系統給的顯卡編號修改device編號 (nvidia-smi)
         infer_time = time.time() - infer_start
         
         annotated_super_frame = results[0].plot()
