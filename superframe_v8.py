@@ -18,7 +18,7 @@ class MultiCamStream:
         self.urls = urls
         self.num_cams = len(urls)
         self.frames = [None] * self.num_cams
-        self.grabbed_counts = [0] * self.num_cams  # 記錄每路相機實際抓取到的幀數
+        self.grabbed_counts = [0] * self.num_cams  # 新增：記錄每支相機實際抓取到的幀數
         self.stopped = False
         self.threads = []
         print(f"啟動 {self.num_cams} 支相機的背景拉流")
@@ -39,7 +39,7 @@ class MultiCamStream:
             ret, frame = cap.read()
             if ret:
                 self.frames[index] = frame
-                self.grabbed_counts[index] += 1  # 成功抓取一幀就 +1
+                self.grabbed_counts[index] += 1  # 新增：成功抓取一幀就 +1
                 if is_video_file: time.sleep(0.033) 
             else:
                 self.frames[index] = None 
@@ -47,10 +47,13 @@ class MultiCamStream:
                 else: time.sleep(0.01)
         cap.release()
 
-    def read(self): return self.frames.copy()
+    def read(self): 
+        return self.frames.copy()
+        
     def stop(self):
         self.stopped = True
         for t in self.threads: t.join() 
+
 
 def get_gpu_power():
     try:
@@ -62,23 +65,24 @@ def get_gpu_power():
     except Exception:
         return 0.0
 
+
 def letterbox_image(img, expected_size):
     ih, iw = img.shape[0:2]
     ew, eh = expected_size
     scale = min(ew / iw, eh / ih)
-    nw, nh = int(iw * scale), int(ih * scale)
+    nw = int(iw * scale)
+    nh = int(ih * scale)
+
     image_resized = cv2.resize(img, (nw, nh))
     new_image = np.zeros((eh, ew, 3), np.uint8)
-    top, left = (eh - nh) // 2, (ew - nw) // 2
+    
+    top = (eh - nh) // 2
+    left = (ew - nw) // 2
     new_image[top:top+nh, left:left+nw] = image_resized
     return new_image
 
 if __name__ == '__main__':
-    TEST_DURATION = 300  # 測試秒數 
-    MODEL_WEIGHTS = "yolov8n.pt"
-    CELL_W, CELL_H = 640, 360    # 單路解析度
-    
-    model = YOLO(MODEL_WEIGHTS) 
+    model = YOLO("yolov8n.pt")
     
     camera_urls = [
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/store-aisle-detection.mp4", 
@@ -86,23 +90,20 @@ if __name__ == '__main__':
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/store-aisle-detection.mp4", 
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/people-detection.mp4" 
     ] 
-    
     streamer = MultiCamStream(camera_urls)
-    time.sleep(2) # 等待攝影機連線
+    time.sleep(2) 
     
-    window_name = "Independent Inference v8"
+    CELL_W, CELL_H = 640, 360
+    window_name = "Super Frame Inference v8"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL) 
     cv2.resizeWindow(window_name, 1280, 720) 
 
-    # --- 效能監控變數初始化 ---
+    TEST_DURATION = 300
     total_frames_processed = 0
     total_inference_time = 0
     total_e2e_time = 0
-    cpu_usages = []
-    ram_usages = []
-    gpu_usages = []
-    vram_usages = []
-    power_usages = []
+    cpu_usages, ram_usages, gpu_usages, vram_usages = [], [], [], []
+    power_usages = [] # 新增：記錄功耗
     
     num_cams = len(camera_urls)
     cols = math.ceil(math.sqrt(num_cams)) 
@@ -112,7 +113,6 @@ if __name__ == '__main__':
 
     while (time.time() - start_time) < TEST_DURATION:
         loop_start_time = time.time()
-
         batch_frames = streamer.read()
         
         valid_frame = next((f for f in batch_frames if f is not None), None)
@@ -122,54 +122,46 @@ if __name__ == '__main__':
             
         black_frame = np.zeros((CELL_H, CELL_W, 3), dtype=np.uint8)
         processed_frames = []
-        
-        infer_start_time = time.time()
-        
-        for i, f in enumerate(batch_frames):
-            if f is not None:
-                # 先把原始畫面縮放到指定大小
-                resized_f = letterbox_image(f, (CELL_W, CELL_H))
-                # 獨立送進模型運算！
-                results = model(resized_f, conf=0.30, verbose=False)
-                # 取得畫好框框的圖，存入準備拼圖的陣列
-                processed_frames.append(results[0].plot())
-            else:
-                # 如果這路沒畫面，就畫一張黑圖，並加上文字提示
-                blank = black_frame.copy()
-                text = "Streaming not found"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                text_size = cv2.getTextSize(text, font, 1.0, 2)[0]
-                text_x = (CELL_W - text_size[0]) // 2
-                text_y = (CELL_H + text_size[1]) // 2
-                cv2.putText(blank, text, (text_x, text_y), font, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
-                processed_frames.append(blank)
-                
-        loop_infer_time = time.time() - infer_start_time
-        # ==========================================
-                
-        # 補齊空缺的格子 (如果攝影機數量不是完美矩形)
+        for f in batch_frames:
+            if f is not None: 
+                processed_frames.append(letterbox_image(f, (CELL_W, CELL_H)))
+            else: 
+                processed_frames.append(black_frame.copy())
+
         while len(processed_frames) < (rows * cols):
             processed_frames.append(black_frame.copy())
 
-        # 開始拼圖顯示 (把已經畫好框的 4 張小圖拼起來)
+        # 拼圖v8
         grid_rows = []
         for r in range(rows):
             row_frames = processed_frames[r * cols : (r + 1) * cols]
             grid_rows.append(cv2.hconcat(row_frames))
-        annotated_super_frame = cv2.vconcat(grid_rows)
+        super_frame = cv2.vconcat(grid_rows)
+        
+        infer_start = time.time()
+        results = model(super_frame, conf=0.30, verbose=False)
+        infer_time = time.time() - infer_start
+        
+        annotated_super_frame = results[0].plot()
 
+        for i, f in enumerate(batch_frames):
+            if f is None:
+                offset_x = (i % cols) * CELL_W
+                offset_y = (i // cols) * CELL_H
+                cv2.putText(annotated_super_frame, "Streaming not found", (offset_x+100, offset_y+200), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 2)
+
+        # countdown
         elapsed = time.time() - start_time
-        cv2.putText(annotated_super_frame, f" Independent Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        cv2.putText(annotated_super_frame, f" Testing... {int(TEST_DURATION - elapsed)}s left", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
         cv2.imshow(window_name, annotated_super_frame)
         
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'): 
             break
 
-        loop_e2e_time = time.time() - loop_start_time
-        
-        total_inference_time += loop_infer_time
-        total_e2e_time += loop_e2e_time
-        total_frames_processed += 1 
+        loop_time = time.time() - loop_start_time
+        total_inference_time += infer_time
+        total_e2e_time += loop_time
+        total_frames_processed += 1
         
         cpu_usages.append(psutil.cpu_percent(interval=None))
         ram_usages.append(psutil.virtual_memory().used / (1024**3))
