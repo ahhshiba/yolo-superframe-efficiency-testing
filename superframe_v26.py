@@ -82,7 +82,7 @@ def letterbox_image(img, expected_size):
     return new_image
 
 if __name__ == '__main__':
-    model = YOLO("yolov8n.pt")
+    model = YOLO("yolo26n.pt")
     
     camera_urls = [
         "https://github.com/intel-iot-devkit/sample-videos/raw/master/store-aisle-detection.mp4", 
@@ -94,11 +94,11 @@ if __name__ == '__main__':
     time.sleep(2) 
     
     CELL_W, CELL_H = 640, 360
-    window_name = "Super Frame Inference v8"
+    window_name = "Super Frame Inference v26"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL) 
     cv2.resizeWindow(window_name, 1280, 720) 
 
-    TEST_DURATION = 300 
+    TEST_DURATION = 60 
     total_frames_processed = 0
     total_inference_time = 0
     total_e2e_time = 0
