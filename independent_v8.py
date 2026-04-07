@@ -122,7 +122,7 @@ if __name__ == '__main__':
             
         black_frame = np.zeros((CELL_H, CELL_W, 3), dtype=np.uint8)
         processed_frames = []
-
+        
         infer_start_time = time.time()
         
         for i, f in enumerate(batch_frames):
@@ -134,6 +134,7 @@ if __name__ == '__main__':
                 # 取得畫好框框的圖，存入準備拼圖的陣列
                 processed_frames.append(results[0].plot())
             else:
+                # 如果這路沒畫面，就畫一張黑圖，並加上文字提示
                 blank = black_frame.copy()
                 text = "Streaming not found"
                 font = cv2.FONT_HERSHEY_SIMPLEX
